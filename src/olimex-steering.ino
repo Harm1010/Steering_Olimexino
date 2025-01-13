@@ -356,29 +356,38 @@ uint8_t CANMsgAvail(void)
  *
  */
 template<typename T>
-void sendCANMessage(T data, uint32_t id, bool rtr = false) {
+void sendCANMessage(T* data, uint32_t id, bool rtr = false) {
   CAN_msg_t msg;
   msg.id = id;
   if (rtr) {
     msg.id |= CAN_FRAME_RTR;
   }
-  msg.len = sizeof(data);
-  memcpy(msg.data, &data, msg.len);
+  msg.len = sizeof(T);
+  memcpy(msg.data, data, msg.len);
   CANSend(&msg);
 }
 
 
 /////////////////////////////////////////////////////////
 
-
-double steering_setpoint;
-double steering_input;
-double motor_output;
+int16_t raw_steering_sensor = 0;
+int16_t raw_steering_setpoint = 0;
+double steering_setpoint = 0 ;
+double steering_input = 0 ;
+double motor_output = 0;
 
 double left_limit = 0x0150;
 double right_limit = 0x0E40;  //aanpassen
 
-double Kp=10, Ki=0.2, Kd=0.05;
+CAN_msg_t CAN_RX_msg;
+CAN_msg_t sensor_msg;
+CAN_msg_t setpoint_msg;
+CAN_msg_t Kp_msg;
+CAN_msg_t Ki_msg;
+CAN_msg_t Kd_msg;
+  
+
+double Kp=0.008, Ki=0, Kd=0.00;
 PID myPID(&steering_input, &motor_output, &steering_setpoint, Kp, Ki, Kd, DIRECT);
 
 void setup() {
@@ -393,6 +402,8 @@ void setup() {
   pinMode(EN_L_PIN, OUTPUT);
   pinMode(EN_R_PIN, OUTPUT);
 
+  analogWriteFrequency(8000);
+
   //turn the PID on
   myPID.SetMode(AUTOMATIC);   
   myPID.SetSampleTime(10);  
@@ -406,8 +417,6 @@ void setup() {
  */
 void loop() {
 
-  CAN_msg_t CAN_RX_msg;
-  int16_t raw_steering_sensor;
 
   static unsigned long lastCANSendTime = 0;
   const unsigned long CAN_SEND_INTERVAL = 30; // 30ms interval
@@ -416,45 +425,87 @@ void loop() {
   if (CANMsgAvail()) {
 
     CANReceive(&CAN_RX_msg);
-
+    // if(CAN_RX_msg.id == 0x000){
+    //   sensor_msg = CAN_RX_msg;
+    // }
     switch (CAN_RX_msg.id) {
-      case 0x000:
+      case 0x000u:
         // Receive raw steering input from sensor
-        memcpy(&raw_steering_sensor, CAN_RX_msg.data, sizeof(int16_t));
+        sensor_msg = CAN_RX_msg;
         break;
-      case 0x124:
+      case 0x124u:
         // Receive steering setpoint
-        memcpy(&steering_setpoint, CAN_RX_msg.data, sizeof(int16_t));
+        setpoint_msg = CAN_RX_msg;
         break;
-      case 0x200:
+      case 0x200u:
         // Receive P value
-        memcpy(&Kp, CAN_RX_msg.data, sizeof(float));
+        Kp_msg = CAN_RX_msg;
         break;
-      case 0x201:
+      case 0x201u:
         // Receive I value
-        memcpy(&Ki, CAN_RX_msg.data, sizeof(float));
+        Ki_msg = CAN_RX_msg;
         break;
-      case 0x202:
+      case 0x202u:
         // Receive D value
-        memcpy(&Kd, CAN_RX_msg.data, sizeof(float));
+        Kd_msg = CAN_RX_msg;
         break;
-      case 0x280:
+      case 0x280u:
         // Send P value with RTR
-        sendCANMessage((float)Kp, 0x280, true);
+        sendCANMessage(&Kp, 0x280, true);
         break;
-      case 0x281:
+      case 0x281u:
         // Send I value with RTR
-        sendCANMessage((float)Ki, 0x281, true);
+        sendCANMessage(&Ki, 0x281, true);
         break;
-      case 0x282:
+      case 0x282u:
         // Send D value with RTR
-        sendCANMessage((float)Kd, 0x282, true);
+        sendCANMessage(&Kd, 0x282, true);
         break;
     }
   }
   
-  // Convert raw steering input to double
-  steering_input = (double)raw_steering_sensor;
+  // Decode and cast raw_steering_sensor to double
+  uint16_t raw_steering_sensor = (uint16_t)sensor_msg.data[0] | 
+                                ((uint16_t)sensor_msg.data[1] << 8);
+  steering_input = (double)(int16_t)raw_steering_sensor;
+
+  // Decode and cast raw_steering_setpoint to double
+  uint16_t raw_steering_setpoint = (uint16_t)setpoint_msg.data[0] | 
+                                  ((uint16_t)setpoint_msg.data[1] << 8);
+  steering_setpoint = (double)(int16_t)raw_steering_setpoint;
+
+
+
+  uint64_t Kp_bits = (uint64_t)Kp_msg.data[0] |
+                    ((uint64_t)Kp_msg.data[1] << 8) |
+                    ((uint64_t)Kp_msg.data[2] << 16) |
+                    ((uint64_t)Kp_msg.data[3] << 24) |
+                    ((uint64_t)Kp_msg.data[4] << 32) |
+                    ((uint64_t)Kp_msg.data[5] << 40) |
+                    ((uint64_t)Kp_msg.data[6] << 48) |
+                    ((uint64_t)Kp_msg.data[7] << 56);
+  double Kp = *(double*)&Kp_bits;
+
+  uint64_t Ki_bits = (uint64_t)Ki_msg.data[0] |
+                    ((uint64_t)Ki_msg.data[1] << 8) |
+                    ((uint64_t)Ki_msg.data[2] << 16) |
+                    ((uint64_t)Ki_msg.data[3] << 24) |
+                    ((uint64_t)Ki_msg.data[4] << 32) |
+                    ((uint64_t)Ki_msg.data[5] << 40) |
+                    ((uint64_t)Ki_msg.data[6] << 48) |
+                    ((uint64_t)Ki_msg.data[7] << 56);
+  double Ki = *(double*)&Ki_bits;
+
+  uint64_t Kd_bits = (uint64_t)Kd_msg.data[0] |
+                    ((uint64_t)Kd_msg.data[1] << 8) |
+                    ((uint64_t)Kd_msg.data[2] << 16) |
+                    ((uint64_t)Kd_msg.data[3] << 24) |
+                    ((uint64_t)Kd_msg.data[4] << 32) |
+                    ((uint64_t)Kd_msg.data[5] << 40) |
+                    ((uint64_t)Kd_msg.data[6] << 48) |
+                    ((uint64_t)Kd_msg.data[7] << 56);
+  double Kd = *(double*)&Kd_bits;
+
 
   // Run PID computation
   myPID.Compute();
@@ -469,17 +520,18 @@ void loop() {
   } else {
     digitalWrite(EN_R_PIN, 1);
     digitalWrite(EN_L_PIN, 1);
-    analogWrite(PWM_L_PIN, (uint8_t)(255 - abs(motor_output)));
+    analogWrite(PWM_L_PIN, (uint8_t)(abs(motor_output)));
     analogWrite(PWM_R_PIN, 0);
   }
 
   // Send CAN messages every 30ms
   if (millis() - lastCANSendTime >= CAN_SEND_INTERVAL) {
     // Prepare and send motor output message
-    sendCANMessage((int16_t)motor_output, 0x107);
-
+    sendCANMessage(&motor_output, 0x107);
     // Prepare and send steering input message
-    sendCANMessage((int16_t)steering_input, 0x108);
+    sendCANMessage(&steering_input, 0x108);
+
+    sendCANMessage(&steering_setpoint, 0x109);
 
     lastCANSendTime = millis();
   }
