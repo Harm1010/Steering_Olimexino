@@ -367,6 +367,18 @@ void sendCANMessage(T* data, uint32_t id, bool rtr = false) {
   CANSend(&msg);
 }
 
+template<typename T>
+void sendCANMessage(T data, uint32_t id, bool rtr = false) {
+  CAN_msg_t msg;
+  msg.id = id;
+  if (rtr) {
+    msg.id |= CAN_FRAME_RTR;
+  }
+  msg.len = sizeof(data);
+  memcpy(msg.data, &data, msg.len);
+  CANSend(&msg);
+}
+
 
 /////////////////////////////////////////////////////////
 
@@ -379,12 +391,12 @@ double motor_output = 0;
 double left_limit = 0x0150;
 double right_limit = 0x0E40;  //aanpassen
 
-CAN_msg_t CAN_RX_msg;
-CAN_msg_t sensor_msg;
-CAN_msg_t setpoint_msg;
-CAN_msg_t Kp_msg;
-CAN_msg_t Ki_msg;
-CAN_msg_t Kd_msg;
+
+static CAN_msg_t sensor_msg;
+static CAN_msg_t setpoint_msg;
+static CAN_msg_t Kp_msg;
+static CAN_msg_t Ki_msg;
+static CAN_msg_t Kd_msg;
   
 
 double Kp=0.008, Ki=0, Kd=0.00;
@@ -402,7 +414,7 @@ void setup() {
   pinMode(EN_L_PIN, OUTPUT);
   pinMode(EN_R_PIN, OUTPUT);
 
-  analogWriteFrequency(8000);
+  analogWriteFrequency(10000);
 
   //turn the PID on
   myPID.SetMode(AUTOMATIC);   
@@ -417,7 +429,7 @@ void setup() {
  */
 void loop() {
 
-
+  static CAN_msg_t CAN_RX_msg;
   static unsigned long lastCANSendTime = 0;
   const unsigned long CAN_SEND_INTERVAL = 30; // 30ms interval
 
@@ -451,31 +463,35 @@ void loop() {
         break;
       case 0x280u:
         // Send P value with RTR
-        sendCANMessage(&Kp, 0x280, true);
+        sendCANMessage(myPID.GetKp(), 0x280, true);
         break;
       case 0x281u:
         // Send I value with RTR
-        sendCANMessage(&Ki, 0x281, true);
+        sendCANMessage(myPID.GetKi(), 0x281, true);
         break;
       case 0x282u:
         // Send D value with RTR
-        sendCANMessage(&Kd, 0x282, true);
+        sendCANMessage(myPID.GetKi(), 0x282, true);
         break;
     }
   }
   
+  if(CAN_RX_msg.id == 0x000){
   // Decode and cast raw_steering_sensor to double
   uint16_t raw_steering_sensor = (uint16_t)sensor_msg.data[0] | 
                                 ((uint16_t)sensor_msg.data[1] << 8);
   steering_input = (double)(int16_t)raw_steering_sensor;
 
+  }
+
+  if(CAN_RX_msg.id == 0x124){
   // Decode and cast raw_steering_setpoint to double
   uint16_t raw_steering_setpoint = (uint16_t)setpoint_msg.data[0] | 
                                   ((uint16_t)setpoint_msg.data[1] << 8);
   steering_setpoint = (double)(int16_t)raw_steering_setpoint;
+  }
 
-
-
+  if(CAN_RX_msg.id == 0x200u ){
   uint64_t Kp_bits = (uint64_t)Kp_msg.data[0] |
                     ((uint64_t)Kp_msg.data[1] << 8) |
                     ((uint64_t)Kp_msg.data[2] << 16) |
@@ -484,8 +500,9 @@ void loop() {
                     ((uint64_t)Kp_msg.data[5] << 40) |
                     ((uint64_t)Kp_msg.data[6] << 48) |
                     ((uint64_t)Kp_msg.data[7] << 56);
-  double Kp = *(double*)&Kp_bits;
-
+  Kp = (double)Kp_bits;
+  }
+  if(CAN_RX_msg.id == 0x201u ){
   uint64_t Ki_bits = (uint64_t)Ki_msg.data[0] |
                     ((uint64_t)Ki_msg.data[1] << 8) |
                     ((uint64_t)Ki_msg.data[2] << 16) |
@@ -494,8 +511,9 @@ void loop() {
                     ((uint64_t)Ki_msg.data[5] << 40) |
                     ((uint64_t)Ki_msg.data[6] << 48) |
                     ((uint64_t)Ki_msg.data[7] << 56);
-  double Ki = *(double*)&Ki_bits;
-
+  Ki = (double)Ki_bits;
+  }
+  if(CAN_RX_msg.id == 0x202u ){
   uint64_t Kd_bits = (uint64_t)Kd_msg.data[0] |
                     ((uint64_t)Kd_msg.data[1] << 8) |
                     ((uint64_t)Kd_msg.data[2] << 16) |
@@ -504,8 +522,8 @@ void loop() {
                     ((uint64_t)Kd_msg.data[5] << 40) |
                     ((uint64_t)Kd_msg.data[6] << 48) |
                     ((uint64_t)Kd_msg.data[7] << 56);
-  double Kd = *(double*)&Kd_bits;
-
+  Kd = (double)Kd_bits;
+  }
 
   // Run PID computation
   myPID.Compute();
@@ -527,11 +545,12 @@ void loop() {
   // Send CAN messages every 30ms
   if (millis() - lastCANSendTime >= CAN_SEND_INTERVAL) {
     // Prepare and send motor output message
-    sendCANMessage(&motor_output, 0x107);
+    int16_t motor = (int16_t)motor_output;
+    sendCANMessage(&motor, 0x107);
     // Prepare and send steering input message
-    sendCANMessage(&steering_input, 0x108);
+    //sendCANMessage(&steering_input, 0x108);
 
-    sendCANMessage(&steering_setpoint, 0x109);
+    //sendCANMessage(&steering_setpoint, 0x109);
 
     lastCANSendTime = millis();
   }
